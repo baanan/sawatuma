@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:5fef8e96b0d92406b01948c2955df3be821113b5e94479bca20084ac777a83de"
+content_hash = "sha256:d5caba4a8046458366732d47f2e35a22d7247899a39efced48343c0a3824a551"
 
 [[package]]
 name = "numpy"

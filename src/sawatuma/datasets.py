@@ -1,4 +1,5 @@
 import bz2
+from math import floor
 import os
 import urllib.request
 from dataclasses import dataclass
@@ -76,7 +77,21 @@ def track_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
 @dataclass
 class Parameters:
     user_count: int
-    track_count: int
+    total_track_count: int
+    listening_counts_count: int
+    track_divisor: int = 1
+
+    def track_count(self) -> int:
+        return floor(self.total_track_count / self.track_divisor)
+
+    def track_is_valid(self, index: int) -> bool:
+        return index % self.track_divisor == 0 and index <= self.total_track_count
+
+    def track_dataset_to_internal(self, index: int) -> int:
+        return floor(index / self.track_divisor)
+
+    def track_internal_to_dataset(self, index: int) -> int:
+        return index * self.track_divisor
 
 
 def __make_one_hot__(length: int, index: int) -> torch.Tensor:
@@ -88,8 +103,11 @@ def __make_one_hot__(length: int, index: int) -> torch.Tensor:
 @dataclass
 class ListenCount:
     user_id: int
-    track_id: int
+    raw_track_id: int
     count: int
+
+    def track_id(self, parameters: Parameters) -> int:
+        return parameters.track_dataset_to_internal(self.raw_track_id)
 
     def rating(self) -> int:
         return 1 if self.count >= 2 else 0
@@ -98,12 +116,13 @@ class ListenCount:
         return __make_one_hot__(parameters.user_count, self.user_id)
 
     def track_one_hot(self, parameters: Parameters) -> Tensor:
-        return __make_one_hot__(parameters.track_count, self.track_id)
+        return __make_one_hot__(parameters.track_count(), self.track_id(parameters))
 
 
 class ListeningCountsDataset(Dataset):
     def __init__(
         self,
+        parameters: Parameters,
         *,
         train: bool,
         train_fraction: float,
@@ -131,15 +150,15 @@ class ListeningCountsDataset(Dataset):
             download=download,
         )
 
-        LISTENING_COUNT_LEN = 519_293_333
-
         print("creating random numbers...")
-        random_list = np.random.rand(LISTENING_COUNT_LEN)
+        random_list = np.random.rand(parameters.listening_counts_count)
         print("checking if they are over the fraction...")
         is_train = pl.lit(random_list < train_fraction)
 
-        training_counts = listening_counts.filter(is_train)
-        testing_counts = listening_counts.filter(is_train.not_())
+        valid_index = pl.col("track_id").mod(parameters.track_divisor).eq(0)
+
+        training_counts = listening_counts.filter(valid_index.and_(is_train))
+        testing_counts = listening_counts.filter(valid_index.and_(is_train.not_()))
 
         print("collecting training counts...")
         training_counts = training_counts.collect(streaming=True)
@@ -170,6 +189,7 @@ class ListeningCountsDataset(Dataset):
 
 
 def listening_counts(
+    parameters: Parameters,
     *,
     train_fraction: float,
     root: str = ROOT_DIR,
@@ -177,12 +197,14 @@ def listening_counts(
     transform: Optional[Callable[[ListenCount], Any]] = None,
 ) -> Tuple[ListeningCountsDataset, ListeningCountsDataset]:
     return ListeningCountsDataset(
+        parameters,
         train=True,
         train_fraction=train_fraction,
         root=root,
         download=download,
         transform=transform,
     ), ListeningCountsDataset(
+        parameters,
         train=False,
         train_fraction=train_fraction,
         root=root,

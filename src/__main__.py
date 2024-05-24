@@ -5,33 +5,33 @@ from sawatuma.device import device
 
 USER_COUNT = 120_322
 TRACK_COUNT = 50_813_373
+LISTENING_COUNTS_COUNT = 519_293_333
 
 
 def main():
     # users = datasets.user_list()
     # tracks = datasets.track_list()
 
-    parameters = sawatuma.datasets.Parameters(USER_COUNT, TRACK_COUNT)
+    parameters = sawatuma.datasets.Parameters(
+        USER_COUNT, TRACK_COUNT, LISTENING_COUNTS_COUNT, track_divisor=64
+    )
 
-    print(device)
+    train, test = sawatuma.datasets.listening_counts(
+        parameters,
+        train_fraction=0.7,
+        transform=lambda counts: (
+            counts.user_one_hot(parameters),
+            counts.track_one_hot(parameters),
+            counts.rating(),
+        ),
+    )
 
-    # train, test = sawatuma.datasets.listening_counts(
-    #     train_fraction=0.7,
-    #     transform=lambda counts: (
-    #         counts.user_one_hot(parameters),
-    #         counts.track_one_hot(parameters),
-    #         counts.rating(),
-    #     ),
-    # )
+    dataloader = DataLoader(train, batch_size=64, shuffle=True)
 
-    print(sawatuma.datasets.ListenCount(1, 1, 1).user_one_hot(parameters))
-
-    # # with a batch size of 16, the track one hots themselves will take around 1gb
-    # dataloader = DataLoader(train, batch_size=2, shuffle=True)
-    #
-    # print("getting the first item from the loader...")
-    # users, tracks, rating = next(iter(dataloader))
-    # print(users.size())
+    print("getting the first item from the loader...")
+    users, tracks, rating = next(iter(dataloader))
+    print(users.size())
+    print(tracks.size())
 
 
 if __name__ == "__main__":
