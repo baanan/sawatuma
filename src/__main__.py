@@ -1,6 +1,5 @@
-from torch.utils.data import DataLoader
 import sawatuma.datasets
-from sawatuma.device import device
+from sawatuma.model import Model
 
 
 USER_COUNT = 120_322
@@ -26,12 +25,11 @@ def main():
         ),
     )
 
-    dataloader = DataLoader(train, batch_size=64, shuffle=True)
+    model = Model(parameters, 50, 0.25)
 
-    print("getting the first item from the loader...")
-    users, tracks, rating = next(iter(dataloader))
-    print(users.size())
-    print(tracks.size())
+    for epoch in range(10):
+        model.train_once(train)
+        print(model.evaluate(test))
 
 
 if __name__ == "__main__":
