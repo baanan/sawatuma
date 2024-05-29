@@ -1,5 +1,5 @@
 import bz2
-from math import floor
+from math import ceil, floor
 import os
 import urllib.request
 from dataclasses import dataclass
@@ -12,6 +12,7 @@ import torch
 from sawatuma.device import device
 from torch import Tensor
 from torch.utils.data import Dataset
+import sawatuma_rs
 
 ROOT_DIR = "data"
 
@@ -22,6 +23,7 @@ TRACK_FILE = "tracks.tsv"
 TRACK_URL = "http://www.cp.jku.at/datasets/LFM-2b/chiir/tracks.tsv.bz2"
 
 LISTENING_COUNTS_FILE = "listening_counts.tsv"
+LISTENING_COUNTS_FILE_FILTERED = "listening_counts_filtered"
 LISTENING_COUNTS_FILE_TRAIN = "listening_counts_train.tsv"
 LISTENING_COUNTS_FILE_TEST = "listening_counts_test.tsv"
 LISTENING_COUNTS_URL = (
@@ -76,13 +78,17 @@ def track_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
 
 @dataclass
 class Parameters:
-    user_count: int
+    total_user_count: int
     total_track_count: int
     listening_counts_count: int
+
+    rating_size: int = 10
+
+    user_divisor: int = 1
     track_divisor: int = 1
 
     def track_count(self) -> int:
-        return floor(self.total_track_count / self.track_divisor)
+        return ceil(self.total_track_count / self.track_divisor)
 
     def track_is_valid(self, index: int) -> bool:
         return index % self.track_divisor == 0 and index <= self.total_track_count
@@ -93,6 +99,18 @@ class Parameters:
     def track_internal_to_dataset(self, index: int) -> int:
         return index * self.track_divisor
 
+    def user_count(self) -> int:
+        return ceil(self.total_user_count / self.user_divisor)
+
+    def user_is_valid(self, index: int) -> bool:
+        return index % self.user_divisor == 0 and index <= self.total_user_count
+
+    def user_dataset_to_internal(self, index: int) -> int:
+        return floor(index / self.user_divisor)
+
+    def user_internal_to_dataset(self, index: int) -> int:
+        return index * self.user_divisor
+
 
 def __make_one_hot__(length: int, index: int) -> torch.Tensor:
     return torch.zeros([length], device=device).scatter(
@@ -102,21 +120,51 @@ def __make_one_hot__(length: int, index: int) -> torch.Tensor:
 
 @dataclass
 class ListenCount:
-    user_id: int
+    raw_user_id: int
     raw_track_id: int
     count: int
+    rating: float
+
+    def seen(self) -> bool:
+        return True
+
+    def user_id(self, parameters: Parameters) -> int:
+        return parameters.user_dataset_to_internal(self.raw_user_id)
 
     def track_id(self, parameters: Parameters) -> int:
         return parameters.track_dataset_to_internal(self.raw_track_id)
 
-    def rating(self) -> int:
-        return 1 if self.count >= 2 else 0
+    def get_rating(self) -> float:
+        return self.rating
+        # return sqrt(self.count)
+        # return (
+        #     10
+        #     if self.count >= 5
+        #     else 5
+        #     if self.count >= 3
+        #     else 3
+        #     if self.count >= 2
+        #     else 1
+        # )
+
+    def rating_one_hot(self, parameters: Parameters) -> Tensor:
+        return __make_one_hot__(
+            parameters.rating_size, ceil(self.get_rating() * parameters.rating_size) - 1
+        )
 
     def user_one_hot(self, parameters: Parameters) -> Tensor:
-        return __make_one_hot__(parameters.user_count, self.user_id)
+        return __make_one_hot__(parameters.user_count(), self.user_id(parameters))
 
     def track_one_hot(self, parameters: Parameters) -> Tensor:
         return __make_one_hot__(parameters.track_count(), self.track_id(parameters))
+
+
+def populate_ratings(frame: pl.LazyFrame) -> pl.LazyFrame:
+    return frame.with_columns(
+        (pl.col("count") / pl.col("count").max().over("user_id"))
+        .sqrt()  # push up lower values
+        .alias("rating")
+    )
 
 
 class ListeningCountsDataset(Dataset):
@@ -140,39 +188,74 @@ class ListeningCountsDataset(Dataset):
         if path.is_file():
             print(f"reading file `{path}`")
             self.listening_counts = pl.read_csv(path)
+            if "rating" not in self.listening_counts:
+                self.listening_counts = populate_ratings(
+                    self.listening_counts.lazy()
+                ).collect()
+                self.listening_counts.write_csv(path)
             return
 
         print("listening counts haven't been separated, separating now")
-        listening_counts = __get_or_download__(
+        __get_or_download__(
             LISTENING_COUNTS_FILE,
             LISTENING_COUNTS_URL,
             root=root,
             download=download,
         )
 
+        print("filtering out users and tracks (this may take a while!)")
+        lines = sawatuma_rs.filter_listening_counts(
+            parameters.user_divisor, parameters.track_divisor, root
+        )
+
+        listening_counts = pl.scan_csv(
+            f"{root}/{LISTENING_COUNTS_FILE_FILTERED}_{parameters.user_divisor}_{parameters.track_divisor}.tsv",
+            separator="\t",
+        )
+
         print("creating random numbers...")
-        random_list = np.random.rand(parameters.listening_counts_count)
+        random_list = np.random.rand(lines)
         print("checking if they are over the fraction...")
         is_train = pl.lit(random_list < train_fraction)
 
-        valid_index = pl.col("track_id").mod(parameters.track_divisor).eq(0)
+        with_ratings = populate_ratings(listening_counts)
 
-        training_counts = listening_counts.filter(valid_index.and_(is_train))
-        testing_counts = listening_counts.filter(valid_index.and_(is_train.not_()))
+        training_counts = with_ratings.filter(is_train)
+        testing_counts = with_ratings.filter(is_train.not_())
 
         print("collecting training counts...")
         training_counts = training_counts.collect(streaming=True)
-        print("  writing them to disk...")
+
+        print("finding all tracks where which more than 2000 users listen to")
+        user_counts = (
+            training_counts.lazy()
+            .group_by("track_id")
+            .agg(pl.col("user_id").count().alias("user_count"))
+            .filter(pl.col("user_count").gt(100))
+            .collect()
+        )
+
+        print("  converting those tracks to a dictionary")
+        in_user_counts = pl.col("track_id").is_in(user_counts["track_id"])
+
+        print("filtering training counts by the dictionary")
+        training_counts = training_counts.filter(in_user_counts)
+        print("  writing training counts")
         training_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TRAIN))
-        print("collecting testing counts...")
-        testing_counts = testing_counts.collect(streaming=True)
-        print("  writing them to disk...")
+
+        print("collecting testing counts")
+        print("  filtering testing counts by the dictionary")
+        testing_counts = testing_counts.filter(in_user_counts).collect(streaming=True)
+        print("  writing testing counts")
         testing_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TEST))
 
         if train:
             self.listening_counts = training_counts
         else:
             self.listening_counts = testing_counts
+
+    def get_listening_counts(self) -> pl.DataFrame:
+        return self.listening_counts
 
     def __len__(self):
         return len(self.listening_counts)
@@ -182,6 +265,7 @@ class ListeningCountsDataset(Dataset):
             self.listening_counts[index, 0],
             self.listening_counts[index, 1],
             self.listening_counts[index, 2],
+            self.listening_counts[index, 3],
         )
         if self.transform is not None:
             counts = self.transform(counts)

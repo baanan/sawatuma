@@ -1,0 +1,3 @@
+def filter_listening_counts(
+    user_divisor: int, track_divisor: int, root: str = "root"
+) -> int: ...
