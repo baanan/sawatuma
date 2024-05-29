@@ -12,7 +12,12 @@ def main():
     # tracks = datasets.track_list()
 
     parameters = sawatuma.datasets.Parameters(
-        USER_COUNT, TRACK_COUNT, LISTENING_COUNTS_COUNT, track_divisor=64
+        USER_COUNT,
+        TRACK_COUNT,
+        LISTENING_COUNTS_COUNT,
+        rating_size=5,
+        track_divisor=64,
+        user_divisor=64,
     )
 
     train, test = sawatuma.datasets.listening_counts(
@@ -21,15 +26,28 @@ def main():
         transform=lambda counts: (
             counts.user_one_hot(parameters),
             counts.track_one_hot(parameters),
-            counts.rating(),
+            counts.rating_one_hot(parameters),
         ),
     )
 
-    model = Model(parameters, 50, 0.25)
+    model = Model(parameters, 64, 0.01)
 
-    for epoch in range(10):
-        model.train_once(train)
-        print(model.evaluate(test))
+    for epoch in range(25):
+        print(f"-- epoch {epoch + 1} --")
+        model.train_once(train, batch_size=512)
+        loss = model.evaluate(test)
+        print(f"loss: {loss:.4f}")
+
+    # user, track, rating = test[0]
+    # found = model(user, track)
+    # print(f"found: {found}, expected: {rating}")
+
+    # listen_count = sawatuma.datasets.ListenCount(3504, 16993728, 0, 0)
+    # found = model(
+    #     listen_count.user_one_hot(parameters).unsqueeze(0),
+    #     listen_count.track_one_hot(parameters).unsqueeze(0),
+    # )
+    # print(f"found: {found}, expected: 0.0")
 
 
 if __name__ == "__main__":
