@@ -1,127 +1,124 @@
-from typing import Any
-import torch
-from torch import nn
-from torch.utils.data import DataLoader
-import math
-
-from sawatuma.datasets import ListeningCountsDataset, Parameters
-
-from math import sqrt
+from typing import Tuple, Union
+from sawatuma.datasets import ListeningCountsDataset
+import numpy as np
+import scipy
+from scipy import sparse
+from tqdm import tqdm
 
 
-class Model(nn.Module):
+def _dataset_to_matricies(
+    dataset: ListeningCountsDataset,
+    confidence_factor: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    preferences = np.zeros(
+        (dataset.parameters.user_count(), dataset.parameters.track_count())
+    )
+    confidences = np.zeros_like(preferences)
+
+    for count in dataset:
+        preferences[count.user_id - 1, count.track_id - 1] = 1
+        confidences[count.user_id - 1, count.track_id - 1] = (
+            count.count * confidence_factor + 1
+        )
+
+    return (preferences, confidences)
+
+
+def _mean_squared_error(true: np.ndarray, predicted: np.ndarray) -> float:
+    return np.average((true - predicted) ** 2, axis=0)
+
+
+class Model:
     def __init__(
         self,
-        parameters: Parameters,
-        latent_factor_count: int,
-        learning_rate: float,
-        weight_decay: float,
-    ):
-        super().__init__()
-
-        drop_percentage = 0.25
-
-        # Embedding layers
-        self.user_factor_layer = nn.Sequential(
-            nn.Linear(parameters.user_count(), latent_factor_count),
-            # nn.Dropout(p=drop_percentage),
-            nn.ReLU(),
-        )
-        # nn.init.xavier_uniform_(self.user_factor_layer[0].weight)
-        self.track_factor_layer = nn.Sequential(
-            nn.Linear(parameters.track_count(), latent_factor_count),
-            # nn.Dropout(p=drop_percentage),
-            nn.ReLU(),
-        )
-        # nn.init.xavier_uniform_(self.track_factor_layer[0].weight)
-
-        # Hidden layers
-        self.neural_net = nn.Sequential(
-            nn.Linear(2 * latent_factor_count, latent_factor_count),
-            nn.ReLU(),
-            nn.Dropout(p=drop_percentage),
-            # nn.Linear(latent_factor_count, latent_factor_count // 2),
-            # nn.ReLU(),
-            # nn.Dropout(p=drop_percentage),
-            nn.Linear(latent_factor_count, parameters.rating_size),
-            nn.Softmax(dim=1),
+        dataset: ListeningCountsDataset,
+        factor_count: int,
+        confidence_factor: float,
+        regularization_factor: float,
+    ) -> None:
+        self.data_parameters = dataset.parameters
+        print("converting datasets into matricies")
+        self.preferences, self.confidences = _dataset_to_matricies(
+            dataset, confidence_factor
         )
 
-        # use mean squared error for the loss function
-        self.loss_function = nn.CrossEntropyLoss()
-
-        # technically, a gradient descent solver isn't the best for matrix factorization
-        # (it's usually better to use alternating least squares, especially for parallelization)
-        # but pytorch doesn't support ALS, so use Adam instead
-        self.optimizer = torch.optim.Adam(
-            self.parameters(), lr=learning_rate, weight_decay=weight_decay
+        self.user_factors = np.random.random(
+            (self.data_parameters.user_count(), factor_count)
+        )
+        self.track_factors = np.random.random(
+            (self.data_parameters.track_count(), factor_count)
         )
 
-    def forward(self, user_one_hots: torch.Tensor, track_one_hots: torch.Tensor):
-        user_factors = self.user_factor_layer(user_one_hots)
-        track_factors = self.track_factor_layer(track_one_hots)
-        # concatenate both the user and track factors together to serve as an input
-        concatenated_factors = torch.cat((user_factors, track_factors), dim=1)
-        # use a non-linear neural network instead of matrix multiplication
-        # because neural networks are smart or something who knows
-        return self.neural_net(concatenated_factors)
+        self.regularization_factor = regularization_factor
+        self.confidence_factor = confidence_factor
 
-    def calculate_loss(
-        self, found: torch.Tensor, expected: torch.Tensor
-    ) -> torch.Tensor:
-        return self.loss_function(found, expected)
+    # transcribed from http://yifanhu.net/PUB/cf.pdf alongside http://ethen8181.github.io/machine-learning/recsys/1_ALSWR.html
+    # variable names assume that `preferences` and `confidences` users as the first dimension and `track_factors` are the factors of the tracks,
+    # but this works perfectly fine if the two are swapped
+    def _als_step(
+        self,
+        preferences: np.ndarray,
+        confidences: np.ndarray,
+        track_factors: np.ndarray,
+    ) -> np.ndarray:
+        FTF = track_factors.T @ track_factors
 
-    def optimize(self, loss: torch.Tensor):
-        # zero the gradients of the optimizer
-        self.optimizer.zero_grad()
-        # backpropagate the loss into the optimizer, inputting new gradients
-        loss.backward()
-        # optimize the neural network using the gradients from the loss
-        self.optimizer.step()
+        user_count = list(preferences.shape)[0]
+        factor_count = list(track_factors.shape)[1]
+        user_factors = np.zeros((user_count, factor_count))
 
-    def train_once(self, dataset: ListeningCountsDataset, *, batch_size: int = 512):
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        self.train()
-        for batch, (user_one_hots, track_one_hots, expected_ratings) in enumerate(
-            dataloader
+        for index, (preferences, confidences) in tqdm(
+            enumerate(zip(preferences, confidences)), total=user_count
         ):
-            print(f"batch {batch + 1}/{len(dataloader)}...")
-            found_ratings = self(user_one_hots, track_one_hots)
-            expected_ratings = expected_ratings.to(torch.float32)
-            loss = self.calculate_loss(found_ratings, expected_ratings)
-            print(f"  mean loss: {loss.mean().item()}")
-            print(f"  first {example(found_ratings[0], expected_ratings[0])}")
-            self.optimize(loss)
+            C = sparse.diags(confidences)
+            CI = sparse.diags(confidences - 1)
+            FTCIF = track_factors.T @ sparse.csr_matrix.dot(CI, track_factors)
+            FTCF = FTF + FTCIF
+            FTCF_reg = FTCF + self.regularization_factor * np.identity(factor_count)
+            FTCF_reg_inv = np.linalg.inv(FTCF_reg)
+            user_factors[index] = FTCF_reg_inv @ track_factors.T @ C @ preferences
 
-    def evaluate(self, dataset: ListeningCountsDataset) -> Any:
-        dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
+        return user_factors
 
-        print("evaluating...")
+    def _step(self):
+        print("  optimizing user factors")
+        self.user_factors = self._als_step(
+            self.preferences, self.confidences, self.track_factors
+        )
 
-        self.eval()
-        total_loss = 0
-        total_points = 0
+        print("  optimizing track factors")
+        self.track_factors = self._als_step(
+            self.preferences.T, self.confidences.T, self.user_factors
+        )
 
-        with torch.no_grad():
-            for user_one_hots, track_one_hots, expected_ratings in dataloader:
-                found_ratings = self(user_one_hots, track_one_hots)
-                expected_ratings = expected_ratings.to(torch.float32)
-                loss = self.calculate_loss(found_ratings, expected_ratings)
-                total_loss += loss.sum().item()
-                total_points += math.prod(loss.size())
-                print(f"  {example(found_ratings[0], expected_ratings[0])}")
+    @staticmethod
+    def _evaluate(dataset: np.ndarray, predictions: np.ndarray) -> float:
+        nonzero = np.nonzero(dataset)
+        return _mean_squared_error(dataset[nonzero], predictions[nonzero])
 
-        average_loss = total_loss / total_points
+    def predict(self):
+        return self.user_factors @ self.track_factors.T
 
-        return average_loss
+    def train(self, num_epochs: int, test: ListeningCountsDataset | None):
+        test_preferences = None
+        if test is not None:
+            test_preferences, _ = _dataset_to_matricies(test, self.confidence_factor)
 
+        print("initial values")
+        predictions = self.predict()
+        print(f"  train evaluation: {self._evaluate(self.preferences, predictions)}")
+        if test_preferences is not None:
+            print(f"  test evaluation: {self._evaluate(test_preferences, predictions)}")
 
-def example(found: torch.Tensor, expected: torch.Tensor) -> str:
-    found_rating = torch.argmax(found)
-    expected_rating = torch.argmax(expected)
-
-    found_components = [f"{item:.2f}" for item in found.tolist()]
-    found_components = f"[{", ".join(found_components)}]"
-
-    return f"found: {found_rating} ({found_components}), expected: {expected_rating}"
+        for epoch in range(num_epochs):
+            print(f"epoch number {epoch + 1}")
+            self._step()
+            print("  predicting values")
+            predictions = self.predict()
+            print(
+                f"  train evaluation: {self._evaluate(self.preferences, predictions)}"
+            )
+            if test_preferences is not None:
+                print(
+                    f"  test evaluation: {self._evaluate(test_preferences, predictions)}"
+                )

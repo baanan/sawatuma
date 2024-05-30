@@ -31,7 +31,7 @@ LISTENING_COUNTS_URL = (
 )
 
 
-def __read_tsvbz2__(url: str) -> pl.DataFrame:
+def _read_tsvbz2(url: str) -> pl.DataFrame:
     print(f"downloading file from url `{url}`...")
     path, _ = urllib.request.urlretrieve(url)
     print("  decompressing file...")
@@ -47,7 +47,7 @@ class NoFileFoundException(Exception):
     ...
 
 
-def __get_or_download__(
+def _get_or_download(
     file_name: str, url: str, *, root: str = ROOT_DIR, download: bool = True
 ) -> pl.LazyFrame:
     os.makedirs(root, exist_ok=True)
@@ -57,7 +57,7 @@ def __get_or_download__(
         print(f"reading file `{path}`")
         return pl.scan_csv(path, separator="\t")
     elif download:
-        downloaded = __read_tsvbz2__(url)
+        downloaded = _read_tsvbz2(url)
         downloaded.write_csv(path, separator="\t")
         return downloaded.lazy()
     else:
@@ -65,13 +65,11 @@ def __get_or_download__(
 
 
 def user_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
-    return __get_or_download__(
-        USER_FILE, USER_URL, root=root, download=download
-    ).collect()
+    return _get_or_download(USER_FILE, USER_URL, root=root, download=download).collect()
 
 
 def track_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
-    return __get_or_download__(
+    return _get_or_download(
         TRACK_FILE, TRACK_URL, root=root, download=download
     ).collect()
 
@@ -81,8 +79,6 @@ class Parameters:
     total_user_count: int
     total_track_count: int
     listening_counts_count: int
-
-    rating_size: int = 10
 
     user_divisor: int = 1
     track_divisor: int = 1
@@ -112,62 +108,14 @@ class Parameters:
         return index * self.user_divisor
 
 
-def __make_one_hot__(length: int, index: int) -> torch.Tensor:
-    return torch.zeros([length], device=device).scatter(
-        0, torch.tensor(index, device=device), 1
-    )
-
-
 @dataclass
 class ListenCount:
-    raw_user_id: int
-    raw_track_id: int
+    user_id: int
+    track_id: int
     count: int
-    rating: float
-
-    def seen(self) -> bool:
-        return True
-
-    def user_id(self, parameters: Parameters) -> int:
-        return parameters.user_dataset_to_internal(self.raw_user_id)
-
-    def track_id(self, parameters: Parameters) -> int:
-        return parameters.track_dataset_to_internal(self.raw_track_id)
-
-    def get_rating(self) -> float:
-        return self.rating
-        # return sqrt(self.count)
-        # return (
-        #     10
-        #     if self.count >= 5
-        #     else 5
-        #     if self.count >= 3
-        #     else 3
-        #     if self.count >= 2
-        #     else 1
-        # )
-
-    def rating_one_hot(self, parameters: Parameters) -> Tensor:
-        return __make_one_hot__(
-            parameters.rating_size, ceil(self.get_rating() * parameters.rating_size) - 1
-        )
-
-    def user_one_hot(self, parameters: Parameters) -> Tensor:
-        return __make_one_hot__(parameters.user_count(), self.user_id(parameters))
-
-    def track_one_hot(self, parameters: Parameters) -> Tensor:
-        return __make_one_hot__(parameters.track_count(), self.track_id(parameters))
 
 
-def populate_ratings(frame: pl.LazyFrame) -> pl.LazyFrame:
-    return frame.with_columns(
-        (pl.col("count") / pl.col("count").max().over("user_id"))
-        .sqrt()  # push up lower values
-        .alias("rating")
-    )
-
-
-class ListeningCountsDataset(Dataset):
+class ListeningCountsDataset:
     def __init__(
         self,
         parameters: Parameters,
@@ -176,9 +124,8 @@ class ListeningCountsDataset(Dataset):
         train_fraction: float,
         root: str = ROOT_DIR,
         download: bool = True,
-        transform: Optional[Callable[[ListenCount], Any]] = None,
     ):
-        self.transform = transform
+        self.parameters = parameters
 
         if train:
             path = Path(root, LISTENING_COUNTS_FILE_TRAIN)
@@ -188,15 +135,10 @@ class ListeningCountsDataset(Dataset):
         if path.is_file():
             print(f"reading file `{path}`")
             self.listening_counts = pl.read_csv(path)
-            if "rating" not in self.listening_counts:
-                self.listening_counts = populate_ratings(
-                    self.listening_counts.lazy()
-                ).collect()
-                self.listening_counts.write_csv(path)
             return
 
         print("listening counts haven't been separated, separating now")
-        __get_or_download__(
+        _get_or_download(
             LISTENING_COUNTS_FILE,
             LISTENING_COUNTS_URL,
             root=root,
@@ -218,34 +160,35 @@ class ListeningCountsDataset(Dataset):
         print("checking if they are over the fraction...")
         is_train = pl.lit(random_list < train_fraction)
 
-        with_ratings = populate_ratings(listening_counts)
+        training_counts = listening_counts.filter(is_train)
+        testing_counts = listening_counts.filter(is_train.not_())
 
-        training_counts = with_ratings.filter(is_train)
-        testing_counts = with_ratings.filter(is_train.not_())
-
-        print("collecting training counts...")
-        training_counts = training_counts.collect(streaming=True)
-
-        print("finding all tracks where which more than 200 users listen to")
-        user_counts = (
-            training_counts.lazy()
-            .group_by("track_id")
-            .agg(pl.col("user_id").count().alias("user_count"))
-            .filter(pl.col("user_count").gt(200))
-            .collect()
-        )
-
-        print("  converting those tracks to a dictionary")
-        in_user_counts = pl.col("track_id").is_in(user_counts["track_id"])
-
-        print("filtering training counts by the dictionary")
-        training_counts = training_counts.filter(in_user_counts)
+        # print("collecting training counts...")
+        # training_counts = training_counts.collect(streaming=True)
+        #
+        # print("finding all tracks where which more than 200 users listen to")
+        # user_counts = (
+        #     training_counts.lazy()
+        #     .group_by("track_id")
+        #     .agg(pl.col("user_id").count().alias("user_count"))
+        #     .filter(pl.col("user_count").gt(0))
+        #     .collect()
+        # )
+        #
+        # print("  converting those tracks to a dictionary")
+        # in_user_counts = pl.col("track_id").is_in(user_counts["track_id"])
+        #
+        # print("filtering training counts by the dictionary")
+        # training_counts = training_counts.filter(in_user_counts)
+        print("collecting training counts")
+        training_counts = training_counts.collect()
         print("  writing training counts")
         training_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TRAIN))
 
         print("collecting testing counts")
-        print("  filtering testing counts by the dictionary")
-        testing_counts = testing_counts.filter(in_user_counts).collect(streaming=True)
+        # print("  filtering testing counts by the dictionary")
+        # testing_counts = testing_counts.filter(in_user_counts).collect(streaming=True)
+        testing_counts = testing_counts.collect()
         print("  writing testing counts")
         testing_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TEST))
 
@@ -260,16 +203,16 @@ class ListeningCountsDataset(Dataset):
     def __len__(self):
         return len(self.listening_counts)
 
-    def __getitem__(self, index) -> Any:
-        counts = ListenCount(
-            self.listening_counts[index, 0],
-            self.listening_counts[index, 1],
-            self.listening_counts[index, 2],
-            self.listening_counts[index, 3],
+    def __getitem__(self, index: int) -> ListenCount:
+        user_id = self.parameters.user_dataset_to_internal(
+            self.listening_counts[index, 0]
         )
-        if self.transform is not None:
-            counts = self.transform(counts)
-        return counts
+        track_id = self.parameters.track_dataset_to_internal(
+            self.listening_counts[index, 1]
+        )
+        count = self.listening_counts[index, 2]
+
+        return ListenCount(user_id, track_id, count)
 
 
 def listening_counts(
@@ -278,7 +221,6 @@ def listening_counts(
     train_fraction: float,
     root: str = ROOT_DIR,
     download: bool = True,
-    transform: Optional[Callable[[ListenCount], Any]] = None,
 ) -> Tuple[ListeningCountsDataset, ListeningCountsDataset]:
     return ListeningCountsDataset(
         parameters,
@@ -286,12 +228,10 @@ def listening_counts(
         train_fraction=train_fraction,
         root=root,
         download=download,
-        transform=transform,
     ), ListeningCountsDataset(
         parameters,
         train=False,
         train_fraction=train_fraction,
         root=root,
         download=download,
-        transform=transform,
     )

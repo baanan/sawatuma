@@ -3,7 +3,12 @@ name = "sawatuma"
 version = "0.1.0"
 description = "Default template for PDM package"
 authors = [{ name = "Baanan", email = "brennancraig132@gmail.com" }]
-dependencies = ["polars>=0.20.29", "numpy>=1.26.4"]
+dependencies = [
+    "polars>=0.20.29",
+    "numpy>=1.26.4",
+    "scipy>=1.13.1",
+    "tqdm>=4.66.4",
+]
 requires-python = "==3.12.*"
 readme = "README.md"
 license = { text = "GPL3" }

@@ -53,6 +53,42 @@ fn filter_listening_counts(
     Ok(line_index)
 }
 
+/// Filters listening counts at `{root}/listening_counts.tsv` and outputs them to
+/// `{root}/listening_counts_filtered.tsv`
+///
+/// Returns the amount of lines written
+#[pyfunction]
+#[pyo3(signature = (divisor, root = "root"))]
+fn cut_listening_counts(divisor: usize, root: &str) -> PyResult<usize> {
+    let output = &format!("{root}/{LISTENING_COUNTS_FILE_OUT}_{divisor}.tsv");
+    let output = Path::new(output);
+
+    if output.exists() {
+        println!("  filtered output already exists, calculating the linecount");
+        let reader = BufReader::new(File::open(output)?);
+        return Ok(reader.lines().count() - 1);
+    }
+
+    let input = format!("{root}/{LISTENING_COUNTS_FILE_IN}");
+    let input = BufReader::new(File::open(input)?);
+
+    let mut lines = input.lines();
+    let header = lines.next().expect("file must at least have a header")?;
+
+    let mut output = BufWriter::new(File::create(output)?);
+
+    writeln!(output, "{header}")?;
+
+    let mut line_index = 0;
+
+    for line in lines.map_while(Result::ok).step_by(2) {
+        writeln!(output, "{line}")?;
+        line_index += 1;
+    }
+
+    Ok(line_index)
+}
+
 fn valid_row(row: &str, user_divisor: usize, track_divisor: usize) -> bool {
     let (user_id, track_id) = row
         .split('\t')
@@ -66,6 +102,7 @@ fn valid_row(row: &str, user_divisor: usize, track_divisor: usize) -> bool {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn sawatuma_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(cut_listening_counts, m)?)?;
     m.add_function(wrap_pyfunction!(filter_listening_counts, m)?)?;
     Ok(())
 }

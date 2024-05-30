@@ -15,28 +15,20 @@ def main():
         USER_COUNT,
         TRACK_COUNT,
         LISTENING_COUNTS_COUNT,
-        rating_size=5,
-        track_divisor=64,
-        user_divisor=64,
+        track_divisor=1024,
+        user_divisor=32,
     )
+
+    print(parameters.track_count())
 
     train, test = sawatuma.datasets.listening_counts(
         parameters,
         train_fraction=0.7,
-        transform=lambda counts: (
-            counts.user_one_hot(parameters),
-            counts.track_one_hot(parameters),
-            counts.rating_one_hot(parameters),
-        ),
     )
 
-    model = Model(parameters, 16, 0.1, 0.05)
+    model = Model(train, 16, 10, 15)
 
-    for epoch in range(25):
-        print(f"-- epoch {epoch + 1} --")
-        model.train_once(train, batch_size=256)
-        loss = model.evaluate(test)
-        print(f"loss: {loss}")
+    model.train(15, test)
 
     # user, track, rating = test[0]
     # found = model(user, track)
