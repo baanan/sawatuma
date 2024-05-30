@@ -30,13 +30,13 @@ def main():
         ),
     )
 
-    model = Model(parameters, 64, 0.01)
+    model = Model(parameters, 16, 0.1, 0.05)
 
     for epoch in range(25):
         print(f"-- epoch {epoch + 1} --")
-        model.train_once(train, batch_size=512)
+        model.train_once(train, batch_size=256)
         loss = model.evaluate(test)
-        print(f"loss: {loss:.4f}")
+        print(f"loss: {loss}")
 
     # user, track, rating = test[0]
     # found = model(user, track)

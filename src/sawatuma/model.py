@@ -11,7 +11,11 @@ from math import sqrt
 
 class Model(nn.Module):
     def __init__(
-        self, parameters: Parameters, latent_factor_count: int, learning_rate: float
+        self,
+        parameters: Parameters,
+        latent_factor_count: int,
+        learning_rate: float,
+        weight_decay: float,
     ):
         super().__init__()
 
@@ -21,23 +25,25 @@ class Model(nn.Module):
         self.user_factor_layer = nn.Sequential(
             nn.Linear(parameters.user_count(), latent_factor_count),
             # nn.Dropout(p=drop_percentage),
+            nn.ReLU(),
         )
-        nn.init.xavier_uniform_(self.user_factor_layer[0].weight)
+        # nn.init.xavier_uniform_(self.user_factor_layer[0].weight)
         self.track_factor_layer = nn.Sequential(
             nn.Linear(parameters.track_count(), latent_factor_count),
             # nn.Dropout(p=drop_percentage),
+            nn.ReLU(),
         )
-        nn.init.xavier_uniform_(self.track_factor_layer[0].weight)
+        # nn.init.xavier_uniform_(self.track_factor_layer[0].weight)
 
         # Hidden layers
         self.neural_net = nn.Sequential(
             nn.Linear(2 * latent_factor_count, latent_factor_count),
             nn.ReLU(),
+            nn.Dropout(p=drop_percentage),
+            # nn.Linear(latent_factor_count, latent_factor_count // 2),
+            # nn.ReLU(),
             # nn.Dropout(p=drop_percentage),
-            nn.Linear(latent_factor_count, latent_factor_count // 2),
-            nn.ReLU(),
-            # nn.Dropout(p=drop_percentage),
-            nn.Linear(latent_factor_count // 2, parameters.rating_size),
+            nn.Linear(latent_factor_count, parameters.rating_size),
             nn.Softmax(dim=1),
         )
 
@@ -47,7 +53,9 @@ class Model(nn.Module):
         # technically, a gradient descent solver isn't the best for matrix factorization
         # (it's usually better to use alternating least squares, especially for parallelization)
         # but pytorch doesn't support ALS, so use Adam instead
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        self.optimizer = torch.optim.Adam(
+            self.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
     def forward(self, user_one_hots: torch.Tensor, track_one_hots: torch.Tensor):
         user_factors = self.user_factor_layer(user_one_hots)

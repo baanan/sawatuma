@@ -226,12 +226,12 @@ class ListeningCountsDataset(Dataset):
         print("collecting training counts...")
         training_counts = training_counts.collect(streaming=True)
 
-        print("finding all tracks where which more than 2000 users listen to")
+        print("finding all tracks where which more than 200 users listen to")
         user_counts = (
             training_counts.lazy()
             .group_by("track_id")
             .agg(pl.col("user_id").count().alias("user_count"))
-            .filter(pl.col("user_count").gt(100))
+            .filter(pl.col("user_count").gt(200))
             .collect()
         )
 
