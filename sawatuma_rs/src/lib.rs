@@ -94,10 +94,28 @@ fn valid_row(row: &str, user_divisor: usize, track_divisor: usize) -> bool {
     user_id % user_divisor == 0 && track_id % track_divisor == 0
 }
 
+#[pyfunction]
+fn cut_quotes(input: &str, output: &str) -> PyResult<()> {
+    let output = Path::new(output);
+    if output.exists() {
+        return Ok(());
+    }
+
+    let input = BufReader::new(File::open(input)?);
+    let mut output = BufWriter::new(File::create(output)?);
+
+    for line in input.lines().map_while(Result::ok) {
+        writeln!(output, "{}", line.trim_matches('"').replace("\"\"", "\""))?;
+    }
+
+    Ok(())
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn sawatuma_rs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cut_listening_counts, m)?)?;
     m.add_function(wrap_pyfunction!(filter_listening_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(cut_quotes, m)?)?;
     Ok(())
 }

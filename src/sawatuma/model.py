@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, List, Self, Tuple, Union
+from typing import Any, List, Tuple, Union
 from sawatuma.datasets import ListeningCountsDataset, Parameters
 import numpy as np
 from scipy import sparse
@@ -24,7 +24,7 @@ def _dataset_to_matricies(
     filled = np.flatnonzero(preferences).shape[0]
     sparsity = 100 * (filled / size)
 
-    print(f"  sparsity: {sparsity:.2f}%")
+    print(f"  filled values: {sparsity:.2f}%")
 
     return (preferences, confidences)
 

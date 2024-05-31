@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 import sawatuma.datasets
 from sawatuma.model import Model
 
@@ -13,27 +14,33 @@ def main():
     # tracks = datasets.track_list()
 
     parameters = sawatuma.datasets.Parameters(
-        user_count=1000,
+        user_count=10000,
         track_count=10000,
         listening_counts_count=LISTENING_COUNTS_COUNT,
         dataset_divisor=2,
     )
 
-    path = Path("model.pickle")
-    if path.exists():
-        model = Model.load(path)
-    else:
+    track_info = sawatuma.datasets.TrackInfoDataset(download=True)
+
+    path = Path("data/model.pickle")
+    if len(sys.argv) > 1 and sys.argv[1] == "--refresh" or not path.exists():
         train, test = sawatuma.datasets.listening_counts(
             parameters,
             train_fraction=0.7,
         )
 
         # this *massive* regularization term is necessary in order to prevent every guess going to 1
-        model = Model(train.parameters, 64, 1, 512)
+        model = Model(train.parameters, 100, 5, 2048)
         model.train(train, test, num_epochs=10)
         model.save(path)
+    else:
+        model = Model.load(path)
 
-    print(model.similar_tracks(0)[:10])
+    similar_tracks = [track_info[track] for track in model.similar_tracks(9037)[:10]]
+    first = similar_tracks[0]  # the most similar track will be itself
+    print(f"similar tracks to {first.artist_name} - {first.track_name}:")
+    for track in similar_tracks[1:]:
+        print(f"  {track.artist_name} - {track.track_name}")
 
 
 if __name__ == "__main__":

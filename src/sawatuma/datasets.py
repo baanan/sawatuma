@@ -1,17 +1,12 @@
 import bz2
-from math import ceil, floor
 import os
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import polars as pl
-import torch
-from sawatuma.device import device
-from torch import Tensor
-from torch.utils.data import Dataset
 import sawatuma_rs
 
 ROOT_DIR = "data"
@@ -40,7 +35,7 @@ def _read_tsvbz2(url: str) -> pl.DataFrame:
     with bz2.open(path) as decoded:
         decoded = decoded.read()
         print("  converting the file to a DataFrame...")
-        frame = pl.read_csv(decoded, separator="\t")
+        frame = pl.read_csv(decoded, separator="\t", quote_char=None)
     os.remove(path)
     return frame
 
@@ -50,14 +45,18 @@ class NoFileFoundException(Exception):
 
 
 def _get_or_download(
-    file_name: str, url: str, *, root: str = ROOT_DIR, download: bool = True
+    file_name: str,
+    url: str,
+    *,
+    root: str = ROOT_DIR,
+    download: bool = True,
 ) -> pl.LazyFrame:
     os.makedirs(root, exist_ok=True)
 
     path = Path(root, file_name)
     if path.is_file():
         print(f"reading file `{path}`")
-        return pl.scan_csv(path, separator="\t")
+        return pl.scan_csv(path, separator="\t", quote_char=None)
     elif download:
         downloaded = _read_tsvbz2(url)
         downloaded.write_csv(path, separator="\t")
@@ -68,12 +67,6 @@ def _get_or_download(
 
 def user_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
     return _get_or_download(USER_FILE, USER_URL, root=root, download=download).collect()
-
-
-def track_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
-    return _get_or_download(
-        TRACK_FILE, TRACK_URL, root=root, download=download
-    ).collect()
 
 
 @dataclass
@@ -252,3 +245,73 @@ def listening_counts(
         root=root,
         download=download,
     )
+
+
+class _ComponentDataset:
+    def __init__(
+        self,
+        *,
+        root: str = ROOT_DIR,
+        download: bool = True,
+    ):
+        mapping_path = f"{root}/{self._mapping_file()}"
+        # assume that the mapping file always exists when the list is made
+        # the listening counts dataset outputs these info files when it's made
+        self.map = pl.read_csv(mapping_path, separator="\t")
+
+        if len(self.map.get_columns()) <= 1:
+            print("  info hasn't been merged, merging it now")
+            # the info dataset hasn't been merged yet
+            info = self._get_info(root, download)
+            # "left" ensures that only the tracks in the map are preserved
+            self.map = self.map.join(info, on="track_id", how="left")
+            # save it for later
+            self.map.write_csv(mapping_path, separator="\t")
+
+    @staticmethod
+    def _mapping_file() -> str:
+        ...
+
+    @staticmethod
+    def _get_info(root: str, download: bool) -> pl.DataFrame:
+        ...
+
+    def __len__(self) -> int:
+        return len(self.map)
+
+    def __getitem__(self, index: int) -> Any:
+        ...
+
+
+@dataclass
+class TrackInfo:
+    original_track_id: int
+    artist_name: str
+    track_name: str
+
+
+class TrackInfoDataset(_ComponentDataset):
+    def __init__(
+        self,
+        *,
+        root: str = ROOT_DIR,
+        download: bool = True,
+    ):
+        print("reading track info")
+        super().__init__(root=root, download=download)
+
+    @staticmethod
+    def _mapping_file() -> str:
+        return "track_mapping.tsv"
+
+    @staticmethod
+    def _get_info(root: str, download: bool) -> pl.DataFrame:
+        return _get_or_download(
+            TRACK_FILE, TRACK_URL, root=root, download=download
+        ).collect()
+
+    def __getitem__(self, index: int) -> TrackInfo:
+        track_id = self.map[index, 0]
+        artist_name = self.map[index, 1]
+        track_name = self.map[index, 2]
+        return TrackInfo(track_id, artist_name, track_name)
