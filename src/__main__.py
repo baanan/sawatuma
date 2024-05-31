@@ -2,8 +2,8 @@ import sawatuma.datasets
 from sawatuma.model import Model
 
 
-USER_COUNT = 120_322
-TRACK_COUNT = 50_813_373
+# USER_COUNT = 120_322
+# TRACK_COUNT = 50_813_373
 LISTENING_COUNTS_COUNT = 519_293_333
 
 
@@ -12,23 +12,20 @@ def main():
     # tracks = datasets.track_list()
 
     parameters = sawatuma.datasets.Parameters(
-        USER_COUNT,
-        TRACK_COUNT,
-        LISTENING_COUNTS_COUNT,
-        track_divisor=1024,
-        user_divisor=32,
+        user_count=1000,
+        track_count=10000,
+        listening_counts_count=LISTENING_COUNTS_COUNT,
+        dataset_divisor=2,
     )
-
-    print(parameters.track_count())
 
     train, test = sawatuma.datasets.listening_counts(
         parameters,
         train_fraction=0.7,
     )
 
-    model = Model(train, 16, 10, 15)
+    model = Model(train, 64, 1, 512)
 
-    model.train(15, test)
+    model.train(10, test)
 
     # user, track, rating = test[0]
     # found = model(user, track)

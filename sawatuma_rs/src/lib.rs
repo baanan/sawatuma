@@ -59,14 +59,12 @@ fn filter_listening_counts(
 /// Returns the amount of lines written
 #[pyfunction]
 #[pyo3(signature = (divisor, root = "root"))]
-fn cut_listening_counts(divisor: usize, root: &str) -> PyResult<usize> {
+fn cut_listening_counts(divisor: usize, root: &str) -> PyResult<()> {
     let output = &format!("{root}/{LISTENING_COUNTS_FILE_OUT}_{divisor}.tsv");
     let output = Path::new(output);
 
     if output.exists() {
-        println!("  filtered output already exists, calculating the linecount");
-        let reader = BufReader::new(File::open(output)?);
-        return Ok(reader.lines().count() - 1);
+        return Ok(());
     }
 
     let input = format!("{root}/{LISTENING_COUNTS_FILE_IN}");
@@ -79,14 +77,11 @@ fn cut_listening_counts(divisor: usize, root: &str) -> PyResult<usize> {
 
     writeln!(output, "{header}")?;
 
-    let mut line_index = 0;
-
     for line in lines.map_while(Result::ok).step_by(2) {
         writeln!(output, "{line}")?;
-        line_index += 1;
     }
 
-    Ok(line_index)
+    Ok(())
 }
 
 fn valid_row(row: &str, user_divisor: usize, track_divisor: usize) -> bool {

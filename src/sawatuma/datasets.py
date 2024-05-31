@@ -17,9 +17,11 @@ import sawatuma_rs
 ROOT_DIR = "data"
 
 USER_FILE = "users.tsv"
+USER_MAPPING_FILE = "user_mapping.tsv"
 USER_URL = "http://www.cp.jku.at/datasets/LFM-2b/chiir/users.tsv.bz2"
 
 TRACK_FILE = "tracks.tsv"
+TRACK_MAPPING_FILE = "track_mapping.tsv"
 TRACK_URL = "http://www.cp.jku.at/datasets/LFM-2b/chiir/tracks.tsv.bz2"
 
 LISTENING_COUNTS_FILE = "listening_counts.tsv"
@@ -76,36 +78,11 @@ def track_list(*, root: str = ROOT_DIR, download: bool = True) -> pl.DataFrame:
 
 @dataclass
 class Parameters:
-    total_user_count: int
-    total_track_count: int
+    user_count: int
+    track_count: int
     listening_counts_count: int
 
-    user_divisor: int = 1
-    track_divisor: int = 1
-
-    def track_count(self) -> int:
-        return ceil(self.total_track_count / self.track_divisor)
-
-    def track_is_valid(self, index: int) -> bool:
-        return index % self.track_divisor == 0 and index <= self.total_track_count
-
-    def track_dataset_to_internal(self, index: int) -> int:
-        return floor(index / self.track_divisor)
-
-    def track_internal_to_dataset(self, index: int) -> int:
-        return index * self.track_divisor
-
-    def user_count(self) -> int:
-        return ceil(self.total_user_count / self.user_divisor)
-
-    def user_is_valid(self, index: int) -> bool:
-        return index % self.user_divisor == 0 and index <= self.total_user_count
-
-    def user_dataset_to_internal(self, index: int) -> int:
-        return floor(index / self.user_divisor)
-
-    def user_internal_to_dataset(self, index: int) -> int:
-        return index * self.user_divisor
+    dataset_divisor: int
 
 
 @dataclass
@@ -145,50 +122,94 @@ class ListeningCountsDataset:
             download=download,
         )
 
-        print("filtering out users and tracks (this may take a while!)")
-        lines = sawatuma_rs.filter_listening_counts(
-            parameters.user_divisor, parameters.track_divisor, root
-        )
+        print("cutting initial dataset in half (this may take a while!)")
+        sawatuma_rs.cut_listening_counts(parameters.dataset_divisor, root=root)
 
         listening_counts = pl.scan_csv(
-            f"{root}/{LISTENING_COUNTS_FILE_FILTERED}_{parameters.user_divisor}_{parameters.track_divisor}.tsv",
+            f"{root}/{LISTENING_COUNTS_FILE_FILTERED}_{parameters.dataset_divisor}.tsv",
             separator="\t",
         )
 
-        print("creating random numbers...")
-        random_list = np.random.rand(lines)
-        print("checking if they are over the fraction...")
+        # a series of the most popular tracks in the dataset
+        print(
+            f"finding the {parameters.track_count} most popular tracks in the dataset"
+        )
+        top_tracks = (
+            listening_counts.group_by("track_id")
+            .agg(pl.col("user_id").count().alias("user_count"))
+            .top_k(parameters.track_count, by="user_count")
+            .select("track_id")
+            .collect(streaming=True)
+        )
+
+        print("  writing the mapping to file")
+        top_tracks.write_csv(f"{root}/{TRACK_MAPPING_FILE}", separator="\t")
+
+        top_tracks = top_tracks["track_id"]
+
+        print("  creating the output indicies of the tracks")
+        track_indicies = pl.Series(values=list(range(parameters.track_count)))
+
+        # rescan csv so the garbage collector doesn't have to keep around the old one
+        listening_counts = pl.scan_csv(
+            f"{root}/{LISTENING_COUNTS_FILE_FILTERED}_{parameters.dataset_divisor}.tsv",
+            separator="\t",
+        )
+
+        # a series of the users with the most expansive track listens
+        print(
+            f"finding the {parameters.user_count} most listening users in the dataset"
+        )
+        top_users = (
+            listening_counts.filter(pl.col("track_id").is_in(top_tracks))
+            .group_by("user_id")
+            .agg(pl.col("track_id").count().alias("track_count"))
+            .top_k(parameters.user_count, by="track_count")
+            .select("user_id")
+            .collect(streaming=True)
+        )
+
+        print("  writing the mapping to file")
+        top_users.write_csv(f"{root}/{USER_MAPPING_FILE}", separator="\t")
+
+        top_users = top_users["user_id"]
+
+        print("  creating the output indicies of the users")
+        user_indicies = pl.Series(values=list(range(parameters.user_count)))
+
+        # rescan csv so the garbage collector doesn't have to keep around the old one
+        listening_counts = pl.scan_csv(
+            f"{root}/{LISTENING_COUNTS_FILE_FILTERED}_{parameters.dataset_divisor}.tsv",
+            separator="\t",
+        )
+
+        print("filtering the dataset by the maps")
+        filtered_counts = (
+            listening_counts.filter(
+                (pl.col("track_id").is_in(top_tracks)).and_(
+                    pl.col("user_id").is_in(top_users)
+                )
+            )
+            .select(
+                pl.col("track_id").replace(top_tracks, track_indicies),
+                pl.col("user_id").replace(top_users, user_indicies),
+                pl.col("count"),
+            )
+            .collect(streaming=True)
+        )
+
+        print("creating random numbers to split the dataset")
+        random_list = np.random.rand(len(filtered_counts))
+        print("  checking if they are over the fraction")
         is_train = pl.lit(random_list < train_fraction)
 
-        training_counts = listening_counts.filter(is_train)
-        testing_counts = listening_counts.filter(is_train.not_())
-
-        # print("collecting training counts...")
-        # training_counts = training_counts.collect(streaming=True)
-        #
-        # print("finding all tracks where which more than 200 users listen to")
-        # user_counts = (
-        #     training_counts.lazy()
-        #     .group_by("track_id")
-        #     .agg(pl.col("user_id").count().alias("user_count"))
-        #     .filter(pl.col("user_count").gt(0))
-        #     .collect()
-        # )
-        #
-        # print("  converting those tracks to a dictionary")
-        # in_user_counts = pl.col("track_id").is_in(user_counts["track_id"])
-        #
-        # print("filtering training counts by the dictionary")
-        # training_counts = training_counts.filter(in_user_counts)
-        print("collecting training counts")
-        training_counts = training_counts.collect()
+        print("filtering training counts")
+        training_counts = filtered_counts.filter(is_train)
         print("  writing training counts")
         training_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TRAIN))
 
-        print("collecting testing counts")
-        # print("  filtering testing counts by the dictionary")
-        # testing_counts = testing_counts.filter(in_user_counts).collect(streaming=True)
-        testing_counts = testing_counts.collect()
+        print("filtering testing counts")
+        testing_counts = filtered_counts.filter(is_train.not_())
         print("  writing testing counts")
         testing_counts.write_csv(Path(root, LISTENING_COUNTS_FILE_TEST))
 
@@ -204,12 +225,8 @@ class ListeningCountsDataset:
         return len(self.listening_counts)
 
     def __getitem__(self, index: int) -> ListenCount:
-        user_id = self.parameters.user_dataset_to_internal(
-            self.listening_counts[index, 0]
-        )
-        track_id = self.parameters.track_dataset_to_internal(
-            self.listening_counts[index, 1]
-        )
+        track_id = self.listening_counts[index, 0]
+        user_id = self.listening_counts[index, 1]
         count = self.listening_counts[index, 2]
 
         return ListenCount(user_id, track_id, count)

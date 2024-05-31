@@ -1,7 +1,6 @@
-from typing import Tuple, Union
+from typing import Tuple
 from sawatuma.datasets import ListeningCountsDataset
 import numpy as np
-import scipy
 from scipy import sparse
 from tqdm import tqdm
 
@@ -11,15 +10,13 @@ def _dataset_to_matricies(
     confidence_factor: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
     preferences = np.zeros(
-        (dataset.parameters.user_count(), dataset.parameters.track_count())
+        (dataset.parameters.user_count, dataset.parameters.track_count)
     )
     confidences = np.zeros_like(preferences)
 
     for count in dataset:
-        preferences[count.user_id - 1, count.track_id - 1] = 1
-        confidences[count.user_id - 1, count.track_id - 1] = (
-            count.count * confidence_factor + 1
-        )
+        preferences[count.user_id, count.track_id] = 1
+        confidences[count.user_id, count.track_id] = count.count * confidence_factor + 1
 
     return (preferences, confidences)
 
@@ -42,18 +39,24 @@ class Model:
             dataset, confidence_factor
         )
 
+        size = np.prod(self.preferences.shape)
+        filled = np.flatnonzero(self.preferences).shape[0]
+        sparsity = 100 * (filled / size)
+
+        print(f"  sparsity: {sparsity:.2f}%")
+
         self.user_factors = np.random.random(
-            (self.data_parameters.user_count(), factor_count)
+            (self.data_parameters.user_count, factor_count)
         )
         self.track_factors = np.random.random(
-            (self.data_parameters.track_count(), factor_count)
+            (self.data_parameters.track_count, factor_count)
         )
 
         self.regularization_factor = regularization_factor
         self.confidence_factor = confidence_factor
 
     # transcribed from http://yifanhu.net/PUB/cf.pdf alongside http://ethen8181.github.io/machine-learning/recsys/1_ALSWR.html
-    # variable names assume that `preferences` and `confidences` users as the first dimension and `track_factors` are the factors of the tracks,
+    # variable names assume that `preferences` and `confidences` have users as the first dimension and `track_factors` are the factors of the tracks,
     # but this works perfectly fine if the two are swapped
     def _als_step(
         self,
@@ -115,10 +118,7 @@ class Model:
             self._step()
             print("  predicting values")
             predictions = self.predict()
-            print(
-                f"  train evaluation: {self._evaluate(self.preferences, predictions)}"
-            )
+            print(f"    average prediction: {predictions.flatten().mean()}")
+            print(f"    train loss: {self._evaluate(self.preferences, predictions)}")
             if test_preferences is not None:
-                print(
-                    f"  test evaluation: {self._evaluate(test_preferences, predictions)}"
-                )
+                print(f"    test loss: {self._evaluate(test_preferences, predictions)}")
