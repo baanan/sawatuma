@@ -1,8 +1,10 @@
-from typing import Tuple
-from sawatuma.datasets import ListeningCountsDataset
+from pathlib import Path
+from typing import Any, List, Self, Tuple, Union
+from sawatuma.datasets import ListeningCountsDataset, Parameters
 import numpy as np
 from scipy import sparse
 from tqdm import tqdm
+import pickle
 
 
 def _dataset_to_matricies(
@@ -18,6 +20,12 @@ def _dataset_to_matricies(
         preferences[count.user_id, count.track_id] = 1
         confidences[count.user_id, count.track_id] = count.count * confidence_factor + 1
 
+    size = np.prod(preferences.shape)
+    filled = np.flatnonzero(preferences).shape[0]
+    sparsity = 100 * (filled / size)
+
+    print(f"  sparsity: {sparsity:.2f}%")
+
     return (preferences, confidences)
 
 
@@ -25,25 +33,21 @@ def _mean_squared_error(true: np.ndarray, predicted: np.ndarray) -> float:
     return np.average((true - predicted) ** 2, axis=0)
 
 
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    a_len = np.linalg.norm(a)
+    b_len = np.linalg.norm(b)
+    return np.dot(a, b) / (a_len * b_len)
+
+
 class Model:
     def __init__(
         self,
-        dataset: ListeningCountsDataset,
+        parameters: Parameters,
         factor_count: int,
         confidence_factor: float,
         regularization_factor: float,
     ) -> None:
-        self.data_parameters = dataset.parameters
-        print("converting datasets into matricies")
-        self.preferences, self.confidences = _dataset_to_matricies(
-            dataset, confidence_factor
-        )
-
-        size = np.prod(self.preferences.shape)
-        filled = np.flatnonzero(self.preferences).shape[0]
-        sparsity = 100 * (filled / size)
-
-        print(f"  sparsity: {sparsity:.2f}%")
+        self.data_parameters = parameters
 
         self.user_factors = np.random.random(
             (self.data_parameters.user_count, factor_count)
@@ -75,7 +79,7 @@ class Model:
         ):
             C = sparse.diags(confidences)
             CI = sparse.diags(confidences - 1)
-            FTCIF = track_factors.T @ sparse.csr_matrix.dot(CI, track_factors)
+            FTCIF = track_factors.T @ sparse.csr_matrix.dot(CI, track_factors)  # type: ignore
             FTCF = FTF + FTCIF
             FTCF_reg = FTCF + self.regularization_factor * np.identity(factor_count)
             FTCF_reg_inv = np.linalg.inv(FTCF_reg)
@@ -83,15 +87,13 @@ class Model:
 
         return user_factors
 
-    def _step(self):
+    def _step(self, preferences: np.ndarray, confidences: np.ndarray):
         print("  optimizing user factors")
-        self.user_factors = self._als_step(
-            self.preferences, self.confidences, self.track_factors
-        )
+        self.user_factors = self._als_step(preferences, confidences, self.track_factors)
 
         print("  optimizing track factors")
         self.track_factors = self._als_step(
-            self.preferences.T, self.confidences.T, self.user_factors
+            preferences.T, confidences.T, self.user_factors
         )
 
     @staticmethod
@@ -102,23 +104,52 @@ class Model:
     def predict(self):
         return self.user_factors @ self.track_factors.T
 
-    def train(self, num_epochs: int, test: ListeningCountsDataset | None):
+    def train(
+        self,
+        train: ListeningCountsDataset,
+        test: ListeningCountsDataset | None,
+        num_epochs: int = 10,
+    ):
+        print("converting the training dataset into a matrix")
+        train_preferences, train_confidences = _dataset_to_matricies(
+            train, self.confidence_factor
+        )
+
         test_preferences = None
         if test is not None:
+            print("converting the testing dataset into a matrix")
             test_preferences, _ = _dataset_to_matricies(test, self.confidence_factor)
 
         print("initial values")
         predictions = self.predict()
-        print(f"  train evaluation: {self._evaluate(self.preferences, predictions)}")
+        print(f"  train evaluation: {self._evaluate(train_preferences, predictions)}")
         if test_preferences is not None:
             print(f"  test evaluation: {self._evaluate(test_preferences, predictions)}")
 
         for epoch in range(num_epochs):
             print(f"epoch number {epoch + 1}")
-            self._step()
+            self._step(train_preferences, train_confidences)
             print("  predicting values")
             predictions = self.predict()
             print(f"    average prediction: {predictions.flatten().mean()}")
-            print(f"    train loss: {self._evaluate(self.preferences, predictions)}")
+            print(f"    train loss: {self._evaluate(train_preferences, predictions)}")
             if test_preferences is not None:
                 print(f"    test loss: {self._evaluate(test_preferences, predictions)}")
+
+    def save(self, path: Union[str, bytes, Path]):
+        with open(path, "wb") as file:
+            pickle.dump(self, file)
+
+    @staticmethod
+    def load(path: Union[str, bytes, Path]) -> Any:
+        with open(path, "rb") as file:
+            return pickle.load(file)
+
+    def similar_tracks(self, of_track: int) -> List[int]:
+        factors = self.track_factors[of_track]
+        similarities = [
+            _cosine_similarity(track, factors) for track in self.track_factors
+        ]
+        # argsort storts the similarities ascending, so reverse it
+        indicies = np.argsort(similarities)[::-1]
+        return indicies.tolist()
