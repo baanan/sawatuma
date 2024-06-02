@@ -16,7 +16,7 @@ def _dataset_to_matricies(
     )
     confidences = np.zeros_like(preferences)
 
-    for count in dataset:
+    for count in tqdm(iter(dataset), total=len(dataset)):
         preferences[count.user_id, count.track_id] = 1
         confidences[count.user_id, count.track_id] = count.count * confidence_factor + 1
 

@@ -14,13 +14,11 @@ def main():
     # tracks = datasets.track_list()
 
     parameters = sawatuma.datasets.Parameters(
-        user_count=10000,
-        track_count=10000,
+        user_count=10_000,
+        track_count=10_000,
         listening_counts_count=LISTENING_COUNTS_COUNT,
         dataset_divisor=2,
     )
-
-    track_info = sawatuma.datasets.TrackInfoDataset(download=True)
 
     path = Path("data/model.pickle")
     if len(sys.argv) > 1 and sys.argv[1] == "--refresh" or not path.exists():
@@ -30,13 +28,15 @@ def main():
         )
 
         # this *massive* regularization term is necessary in order to prevent every guess going to 1
-        model = Model(train.parameters, 100, 5, 2048)
-        model.train(train, test, num_epochs=10)
+        model = Model(train.parameters, 100, 5, 512)
+        model.train(train, test, num_epochs=5)
         model.save(path)
     else:
         model = Model.load(path)
 
-    similar_tracks = [track_info[track] for track in model.similar_tracks(9037)[:10]]
+    track_info = sawatuma.datasets.TrackInfoDataset(download=True)
+
+    similar_tracks = [track_info[track] for track in model.similar_tracks(7636)[:10]]
     first = similar_tracks[0]  # the most similar track will be itself
     print(f"similar tracks to {first.artist_name} - {first.track_name}:")
     for track in similar_tracks[1:]:

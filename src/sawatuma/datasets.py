@@ -285,6 +285,7 @@ class _ComponentDataset:
 
 @dataclass
 class TrackInfo:
+    track_id: int
     original_track_id: int
     artist_name: str
     track_name: str
@@ -314,4 +315,4 @@ class TrackInfoDataset(_ComponentDataset):
         track_id = self.map[index, 0]
         artist_name = self.map[index, 1]
         track_name = self.map[index, 2]
-        return TrackInfo(track_id, artist_name, track_name)
+        return TrackInfo(index, track_id, artist_name, track_name)
