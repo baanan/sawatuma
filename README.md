@@ -12,7 +12,7 @@ The main bits of code are described in four files:
 
 ## Installation
 
-This project requires pdm, so please [install it first](https://pdm-project.org/en/latest/#installation).
+This project requires [pdm](https://pdm-project.org/en/latest/#installation) and [maturin](https://github.com/PyO3/maturin?tab=readme-ov-file#usage), so install them first.
 
 First, clone the reposistory:
 
@@ -21,7 +21,30 @@ git clone https://github.com/baanan/sawatuma.git
 cd sawatuma
 ```
 
-If desired, you may want to download a precompiled model and track mapping from the [latest release](https://github.com/baanan/sawatuma/releases/latest). If you do, place both of these files in a folder named `data` off of the project root.
+Then, install pdm dependencies
+
+```bash
+pdm install
+```
+
+And compile the rust dependency
+
+```bash
+pdm venv activate
+pdm run python -m ensurepip
+cd sawatuma_rs
+maturin develop
+cd ..
+```
+
+If desired, you may want to download a precompiled model and track mapping from the [latest release](https://github.com/baanan/sawatuma/releases/latest). If you do, download both of these files into a folder named `data` off of the project root.
+
+```bash
+mkdir data; cd data
+wget https://github.com/baanan/sawatuma/releases/latest/download/model.pickle
+wget https://github.com/baanan/sawatuma/releases/latest/download/track_mapping.tsv
+cd ..
+```
 
 Then, run the `__main__` file using pdm (this may take a very long time!):
 
