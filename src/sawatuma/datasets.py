@@ -4,6 +4,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Tuple
+import functools
 
 import numpy as np
 import polars as pl
@@ -315,11 +316,16 @@ class TrackInfo(_ComponentDataset):
         ).collect()
 
     def search(self, components: List[str]) -> List[Track]:
-        filtered = self.map.with_row_index().filter(
-            (pl.col("artist_name").str.contains_any(components)).or_(
-                pl.col("track_name").str.contains_any(components)
+        conditions = [
+            (
+                pl.col("artist_name").str.to_lowercase().str.contains(component.lower())
+            ).or_(
+                pl.col("track_name").str.to_lowercase().str.contains(component.lower())
             )
-        )
+            for component in components
+        ]
+        filter = functools.reduce(lambda a, b: a.and_(b), conditions)
+        filtered = self.map.with_row_index().filter(filter)
         return [
             Track(index, track_id, artist_name, track_name)
             for index, track_id, artist_name, track_name in filtered.rows()

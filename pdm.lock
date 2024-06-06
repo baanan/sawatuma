@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:d8040dc1c30467b38df28bdabfa603973b6b2f92203f3a69c30748a3d65889ec"
+content_hash = "sha256:06adb6455d45711e87f4af011b2ec91599f60454fb7006bdaaeb23cb2e504f35"
 
 [[package]]
 name = "colorama"
@@ -17,6 +17,15 @@ marker = "platform_system == \"Windows\""
 files = [
     {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
     {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
+]
+
+[[package]]
+name = "functools"
+version = "0.5"
+summary = ""
+groups = ["default"]
+files = [
+    {file = "functools-0.5.tar.gz", hash = "sha256:596ed8999dee419c0749a41bfdd82e4697e80ea27ee01c716003ef55be9a54c5"},
 ]
 
 [[package]]
