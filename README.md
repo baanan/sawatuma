@@ -5,10 +5,10 @@ A collaborative filtering music recommender built on the [LFM-2b](http://www.cp.
 The actual implementation uses a type of [Matrix Factorization](https://datajobs.com/data-science-repo/Recommender-Systems-[Netflix].pdf) that accepts implicit data (such as the amount of times a user has listened to a track) as described by [Yifan Hu et al.](http://yifanhu.net/PUB/cf.pdf) This was chosen as the dataset lists listening events, not actual ratings of tracks.
 
 The main bits of code are described in four files:
-- [`src/sawatuma/model.py`]: the matrix factorization model
-- [`src/sawatuma/datasets.py`]: the code responsible for downloading, extracting, and portioning the data
-- [`src/__main__.py`]: describes the main parameters of the model
-- [`src/tui.py`]: the basic tui that comes with the model
+- `src/sawatuma/model.py`: the matrix factorization model
+- `src/sawatuma/datasets.py`: the code responsible for downloading, extracting, and portioning the data
+- `src/__main__.py`: describes the main parameters of the model
+- `src/tui.py`: the basic tui that comes with the model
 
 ## Installation
 
