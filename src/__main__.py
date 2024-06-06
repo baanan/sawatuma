@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import sawatuma.datasets
 from sawatuma.model import Model
+import tui
 
 
 # USER_COUNT = 120_322
@@ -34,13 +35,11 @@ def main():
     else:
         model = Model.load(path)
 
-    track_info = sawatuma.datasets.TrackInfoDataset(download=True)
+    track_info = sawatuma.datasets.TrackInfo(download=True)
 
-    similar_tracks = [track_info[track] for track in model.similar_tracks(7636)[:10]]
-    first = similar_tracks[0]  # the most similar track will be itself
-    print(f"similar tracks to {first.artist_name} - {first.track_name}:")
-    for track in similar_tracks[1:]:
-        print(f"  {track.artist_name} - {track.track_name}")
+    print()
+    print("enter 'help' for help")
+    tui.run(track_info, model)
 
 
 if __name__ == "__main__":

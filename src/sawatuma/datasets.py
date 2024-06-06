@@ -3,7 +3,7 @@ import os
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 import numpy as np
 import polars as pl
@@ -284,14 +284,17 @@ class _ComponentDataset:
 
 
 @dataclass
-class TrackInfo:
+class Track:
     track_id: int
     original_track_id: int
     artist_name: str
     track_name: str
 
+    def __repr__(self) -> str:
+        return f"{self.artist_name} - {self.track_name} (#{self.track_id})"
 
-class TrackInfoDataset(_ComponentDataset):
+
+class TrackInfo(_ComponentDataset):
     def __init__(
         self,
         *,
@@ -311,8 +314,19 @@ class TrackInfoDataset(_ComponentDataset):
             TRACK_FILE, TRACK_URL, root=root, download=download
         ).collect()
 
-    def __getitem__(self, index: int) -> TrackInfo:
+    def search(self, components: List[str]) -> List[Track]:
+        filtered = self.map.with_row_index().filter(
+            (pl.col("artist_name").str.contains_any(components)).or_(
+                pl.col("track_name").str.contains_any(components)
+            )
+        )
+        return [
+            Track(index, track_id, artist_name, track_name)
+            for index, track_id, artist_name, track_name in filtered.rows()
+        ]
+
+    def __getitem__(self, index: int) -> Track:
         track_id = self.map[index, 0]
         artist_name = self.map[index, 1]
         track_name = self.map[index, 2]
-        return TrackInfo(index, track_id, artist_name, track_name)
+        return Track(index, track_id, artist_name, track_name)
